@@ -46,6 +46,12 @@ class Exposure(db.Entity):
     raman_image_header = Optional(LongStr)
     psf_params = Optional(LongStr)
     sources = Optional(LongStr)
+    sky_condition_start_time = Optional(LongStr)
+    sky_condition_start = Optional(LongStr)
+    sky_comment_start = Optional(LongStr)
+    sky_condition_end_time = Optional(LongStr)
+    sky_condition_end = Optional(LongStr)
+    sky_comment_end = Optional(LongStr)
 
     #   ----- Relations -----
 
@@ -73,6 +79,7 @@ def museScript():
 
     start = time.time()
     all_raw_files = []
+    all_nightlog_files = []
     all_datacube_files = []
     all_raman_files = []
     all_prm_files = []
@@ -129,15 +136,21 @@ def museScript():
             continue  # Sky observation, ignore
         if 'HIERARCH ESO DPR CATG' in header and header['HIERARCH ESO DPR CATG'] == 'SCIENCE':
             all_raw_files.append(filepath)
+            nightlog_path = Path(str(filepath)[:-7] + "NL.txt")
+            if Path.exists(nightlog_path):
+                print("Found a nightlog!")
+                all_nightlog_files.append(nightlog_path)
     end = time.time()
     print('{:.3f}'.format(end-start) + " seconds to finish file search")
     print('{:d}'.format(len(all_raw_files)) + " raw science exposures found")
+    print('{:d}'.format(len(all_nightlog_files)) + " nightlogs found")
     print('{:d}'.format(len(all_datacube_files)) + " reduced datacubes found")
     print('{:d}'.format(len(all_raman_files)) + " raman files found")
     print('{:d}'.format(len(all_prm_files)) + " PRM files found")
     print('{:d}'.format(len(all_psf_files)) + " PSF files found")
     print('{:d}'.format(skip_number) + " files skipped")
 
+    quit()
     # Datacube extraction
     unique_observations = []
     reduced_cube_entries = []
