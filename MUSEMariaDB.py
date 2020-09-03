@@ -2,6 +2,7 @@ from pathlib import Path
 import time
 import os
 from astropy.io import fits
+from astropy.table import Table
 from tqdm import tqdm
 import numpy as np
 import json
@@ -9,10 +10,14 @@ from pony.orm import *
 
 provider = "mysql"
 host = "127.0.0.1"
-user = "username"
-passwd = "password"
-database_name = "DB_name"
-rootDir = "/home/dir/to/data"
+user = "thtkra"
+passwd = "test1"
+database_name = "MUSEDB2"
+rootDir = "/home/thtkra/Documents/"
+#user = "username"
+#passwd = "password"
+#database_name = "DB_name"
+#rootDir = "/home/dir/to/data"
 
 # FITS filenames to be ignored
 ignore_list = ['PIXTABLE', 'MASTER', 'LINES', 'SKY', "STD_", "TRACE"]
@@ -23,6 +28,7 @@ ignore_list = ['PIXTABLE', 'MASTER', 'LINES', 'SKY', "STD_", "TRACE"]
 ##############################
 
 db = Database()
+
 
 # Target class describes an entry to the Target table in the database
 # The classes have to inherit db.Entity from Pony
@@ -35,6 +41,7 @@ class Target(db.Entity):
 
     exposures = Set('Exposure')  # One target contains a set of exposures
 
+
 # Exposure table class
 class Exposure(db.Entity):
     #   ----- Attributes -----
@@ -44,14 +51,24 @@ class Exposure(db.Entity):
     datacube_header = Optional(LongStr)
     raw_exposure_header = Optional(LongStr)
     raman_image_header = Optional(LongStr)
+    pampelmuse_catalog = Optional(LongStr)
     psf_params = Optional(LongStr)
     sources = Optional(LongStr)
+
+    #   ----- Sky parameters -----
+    sky_condition_start_time = Optional(float)
+    sky_condition_start = Optional(LongStr)
+    sky_comment_start = Optional(LongStr)
+    sky_condition_end_time = Optional(float)
+    sky_condition_end = Optional(LongStr)
+    sky_comment_end = Optional(LongStr)
 
     #   ----- Relations -----
 
     target = Required('Target')  # One exposure belongs to a target
 
 
+# This simplifies some header value fetches
 def fetch_data(header, keyword):
     try:
         return header[keyword]
@@ -59,8 +76,16 @@ def fetch_data(header, keyword):
         print('Keyword ' + keyword + ' not found.')
 
 
+# This method converts an np.int64 to python native int, because the json library
+# at the moment cannot deal with numpy int64
+def convert_npint64_to_int(o):
+    if isinstance(o, np.int64):
+        return int(o)
+    raise TypeError
+
+
 @db_session  # Decorator from Pony to make the function into a db session, thus the database can be modified
-def museScript():
+def muse_script():
     """
     This function read 5 files (prm, psf, reduced, raman and raw) to store the information of each exposure in a database.
 
@@ -73,6 +98,7 @@ def museScript():
 
     start = time.time()
     all_raw_files = []
+    all_nightlog_files = []
     all_datacube_files = []
     all_raman_files = []
     all_prm_files = []
@@ -129,13 +155,25 @@ def museScript():
             continue  # Sky observation, ignore
         if 'HIERARCH ESO DPR CATG' in header and header['HIERARCH ESO DPR CATG'] == 'SCIENCE':
             all_raw_files.append(filepath)
+            nightlog_path = Path(str(filepath)[:-7] + "NL.txt")
+            if Path.exists(nightlog_path):
+                all_nightlog_files.append(nightlog_path)
+
+    # detections.cat file scan and identification
+    # pampelmuse source catalogs
+    print("Generating list of pampelmuse cat files...")
+    all_catalog_files = list(Path(rootDir).rglob("*.detections.cat"))
+
+
     end = time.time()
     print('{:.3f}'.format(end-start) + " seconds to finish file search")
     print('{:d}'.format(len(all_raw_files)) + " raw science exposures found")
+    print('{:d}'.format(len(all_nightlog_files)) + " nightlogs found")
     print('{:d}'.format(len(all_datacube_files)) + " reduced datacubes found")
     print('{:d}'.format(len(all_raman_files)) + " raman files found")
     print('{:d}'.format(len(all_prm_files)) + " PRM files found")
     print('{:d}'.format(len(all_psf_files)) + " PSF files found")
+    print('{:d}'.format(len(all_catalog_files)) + " catalog files found")
     print('{:d}'.format(skip_number) + " files skipped")
 
     # Datacube extraction
@@ -251,7 +289,53 @@ def museScript():
 
         psf_entries.append((observation_info.copy(), psfParams.copy(), sources.copy()))
 
-    # Raw exposure extraction
+    ##############################
+    # Catalog parsing starts here
+    ##############################
+
+    catalog_entries = []
+    print("Parsing through found catalog files...")
+    for catalog_file in all_catalog_files:
+        observation_info = {}
+
+        catalog_filepath, catalog_filename = os.path.split(catalog_file)
+
+        expected_cube_name = catalog_filename.replace('.detections.cat', '.fits')
+        corresponding_cube_fullpath = catalog_filepath + "/" + expected_cube_name
+
+        observation_info['observation_time'] = 'n/a'
+        observation_info['target'] = 'n/a'
+        observation_info['instrument_mode'] = 'n/a'
+        # Check if the datacube is in the same directory, otherwise look elsewhere for it
+        if Path(corresponding_cube_fullpath).exists():
+            observation_info['observation_time'] = fits.getheader(corresponding_cube_fullpath)['DATE-OBS']
+            observation_info['target'] = Target.get(target_name=fits.getheader(corresponding_cube_fullpath)['OBJECT'])
+            observation_info['instrument_mode'] = fits.getheader(corresponding_cube_fullpath)['HIERARCH ESO INS MODE']
+        else:
+            for datacube_file in all_datacube_files:
+                if datacube_file.name == expected_cube_name:
+                    observation_info['observation_time'] = fits.getheader(datacube_file)['DATE-OBS']
+                    observation_info['target'] = Target.get(target_name=fits.getheader(datacube_file)['OBJECT'])
+                    observation_info['instrument_mode'] = fits.getheader(datacube_file)['HIERARCH ESO INS MODE']
+                    break
+
+        if observation_info['target'] == 'n/a':
+            # Catalog without target or observation parameters is kind of useless, skip these
+            print("Couldn't find a match for a catalog file " + catalog_filename + ".")
+            continue
+
+        catalog_table = Table.read(catalog_file, format="ascii.ecsv")
+        catalog_array = np.asarray(catalog_table)
+        list_of_cat_entries = []
+        for i in range(catalog_array.shape[0]):
+            entry_dict = {k: v for k, v in zip(catalog_array[i].dtype.names, catalog_array[i])}
+            list_of_cat_entries.append(entry_dict)
+
+        catalog_entries.append((observation_info.copy(), list_of_cat_entries.copy()))
+
+    #######################################
+    # Raw exposure extraction starts here
+    #######################################
 
     raw_fits_entries = []
     for raw_filename in all_raw_files:
@@ -287,6 +371,101 @@ def museScript():
             pass
 
         raw_fits_entries.append(raw_parameters)
+
+    nightlog_weather_entries = []
+    corresponding_rawfile = ""
+    # Nightlog extraction
+    for nightlog_filename in all_nightlog_files:
+        try:
+            nightlog_parameters = {}
+            corresponding_rawfile = str(nightlog_filename)[:-6] + "fits.fz"
+            raw_header = fits.getheader(corresponding_rawfile)
+        except FileNotFoundError:
+            print("Raw file " + corresponding_rawfile + " not found.")
+            continue
+        try:
+            with open(nightlog_filename) as f:
+                read_lines = f.readlines()
+        except FileExistsError:
+            print("Nightlog file " + nightlog_filename + " not found.")
+            continue
+        # Redundant doublecheck that this is indeed a science exposure
+        if not ('HIERARCH ESO DPR CATG' in header and header['HIERARCH ESO DPR CATG'] == 'SCIENCE'):
+            continue
+
+        obs_time = header["DATE-OBS"]
+        local_start_time = float(raw_header["UTC"])
+        integration_time = float(raw_header["EXPTIME"])
+        local_end_time = (local_start_time + integration_time) % 86400.0
+        if local_start_time > 43200.0:
+            local_start_time -= 86400.0
+
+        line_extraction = []
+
+        # Read through the nightlog, starting from the weather report
+        # Take the hh:mm time and transform into UTC seconds
+        for line in read_lines[10:]:
+            if line == "---------------------------------------------------\n" or line == "\n":
+                break
+            line_split = line[:-1].split("\t")
+            try:
+                weather_time = float(line_split[0].split(":")[0]) * 3600.0 + float(line_split[0].split(":")[1]) * 60.0
+            except ValueError:
+                continue
+            if weather_time > 43200.0:
+                weather_time -= 86400.0
+            #print(weather_time)
+            weather_line = [weather_time,
+                            line_split[1],
+                            line_split[2]]
+            line_extraction.append(weather_line)
+
+        start_weather_time = 0.0
+        end_weather_time = 0.0
+        observation_start_condition = "None"
+        observation_end_condition = "None"
+        observation_start_comment = "None"
+        observation_end_comment = "None"
+        i = -1
+        # Loop through the weather comments
+        for line in line_extraction:
+            weather_comment_time = line[0]
+            i += 1
+            if weather_comment_time > 43200:
+                weather_comment_time -= 86400
+            # Check we've reached past the exposure start
+            if weather_comment_time > local_start_time:
+                break
+            start_weather_time = line[0]
+            end_weather_time = line[0]
+            observation_start_condition = line[1]
+            observation_end_condition = line[1]
+            observation_start_comment = line[2]
+            observation_end_comment = line[2]
+
+        # Loop through the weather comments, but start where we left off previously
+        for line in line_extraction[i:]:
+            weather_comment_time = line[0]
+            if line[0] > 43200:
+                weather_comment_time -= 86400
+            # Check we've reached past the exposure end
+            if weather_comment_time > local_end_time:
+                break
+            end_weather_time = line[0]
+            observation_end_condition = line[1]
+            observation_end_comment = line[2]
+
+        # Add all the interesting parameters to a dictionary...
+        nightlog_parameters["observation_time"] = raw_header["DATE-OBS"]
+        nightlog_parameters["sky_condition_start_time"] = start_weather_time
+        nightlog_parameters["sky_condition_start"] = observation_start_condition
+        nightlog_parameters["sky_comment_start"] = observation_start_comment
+        nightlog_parameters["sky_condition_end_time"] = end_weather_time
+        nightlog_parameters["sky_condition_end"] = observation_end_condition
+        nightlog_parameters["sky_comment_end"] = observation_end_comment
+
+        # ...and throw it into the pile
+        nightlog_weather_entries.append(nightlog_parameters)
 
     # Raman file extraction
     raman_fits_entries = []
@@ -341,6 +520,16 @@ def museScript():
                 observation_dictionary['raw_exposure_header'] = raw_fits_entry['header']
                 raw_fits_entries.remove(raw_fits_entry)
                 break
+        for nightlog_entry in nightlog_weather_entries:
+            if observation_key in nightlog_entry['observation_time']:
+                observation_dictionary["sky_condition_start_time"] = nightlog_entry["sky_condition_start_time"]
+                observation_dictionary["sky_condition_start"] = nightlog_entry["sky_condition_start"]
+                observation_dictionary["sky_comment_start"] = nightlog_entry["sky_comment_start"]
+                observation_dictionary["sky_condition_end_time"] = nightlog_entry["sky_condition_end_time"]
+                observation_dictionary["sky_condition_end"] = nightlog_entry["sky_condition_end"]
+                observation_dictionary["sky_comment_end"] = nightlog_entry["sky_comment_end"]
+                nightlog_weather_entries.remove(nightlog_entry)
+                break
         for raman_fits_entry in raman_fits_entries:
             if observation_key in raman_fits_entry['observation_time']:
                 observation_dictionary['target'] = raman_fits_entry['target']
@@ -358,8 +547,18 @@ def museScript():
                 observation_dictionary['sources'] = psf_entry[2]
                 psf_entries.remove(psf_entry)
                 break
+        for catalog_entry in catalog_entries:
+            if observation_key in catalog_entry[0]['observation_time']:
+                observation_dictionary['target'] = catalog_entry[0]['target']
+                observation_dictionary['observation_time'] = catalog_entry[0]['observation_time']
+                observation_dictionary['insMode'] = catalog_entry[0]['instrument_mode']
+                observation_dictionary['pampelmuse_catalog'] = catalog_entry[1]
+                catalog_entries.remove(catalog_entry)
+                break
 
         # Modify headers into more JSON-like format
+        if 'pampelmuse_catalog' in observation_dictionary:
+            observation_dictionary['pampelmuse_catalog'] = json.dumps(observation_dictionary['pampelmuse_catalog'], default=convert_npint64_to_int)
         if 'psf_params' in observation_dictionary:
             observation_dictionary['psf_params'] = json.dumps(observation_dictionary['psf_params'])
         if 'sources' in observation_dictionary:
@@ -401,4 +600,4 @@ def museScript():
 db.bind(provider="mysql", host="127.0.0.1", user=user, passwd=passwd, db=database_name)
 db.generate_mapping(check_tables=False, create_tables=True)
 
-museScript()
+muse_script()
