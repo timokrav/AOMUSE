@@ -10,14 +10,10 @@ from pony.orm import *
 
 provider = "mysql"
 host = "127.0.0.1"
-user = "thtkra"
-passwd = "test1"
-database_name = "MUSEDB2"
-rootDir = "/home/thtkra/Documents/"
-#user = "username"
-#passwd = "password"
-#database_name = "DB_name"
-#rootDir = "/home/dir/to/data"
+user = "username"
+passwd = "password"
+database_name = "DB_name"
+rootDir = "/home/dir/to/data"
 
 # FITS filenames to be ignored
 ignore_list = ['PIXTABLE', 'MASTER', 'LINES', 'SKY', "STD_", "TRACE"]
