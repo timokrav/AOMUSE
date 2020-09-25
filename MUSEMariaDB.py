@@ -1,5 +1,7 @@
+import logging
 from pathlib import Path
 import time
+from datetime import datetime
 import os
 from astropy.io import fits
 from astropy.table import Table
@@ -13,7 +15,7 @@ host = "127.0.0.1"
 user = "thtkra"
 passwd = "test1"
 database_name = "MUSEDB2"
-rootDir = "/home/thtkra/Documents/"
+rootDir = "/home/thtkra/Documents/co2data/100818"
 #user = "username"
 #passwd = "password"
 #database_name = "DB_name"
@@ -111,6 +113,7 @@ def muse_script():
     fits_list = list(Path(rootDir).rglob('*.fits'))
 
     print("Starting fits...")
+    logging.info("Starting fits file identification.")
     time.sleep(0.1)  # Makes the terminal output pretty
     for filepath in tqdm(fits_list):
         if any(ignored_word in filepath.parts[-1] for ignored_word in ignore_list):
@@ -141,6 +144,7 @@ def muse_script():
         if ".psf" in filepath.parts[-1]:
             all_psf_files.append(filepath)
         #TODO Add a check for the upcoming psf-per-wavelength files
+    logging.info("Finished with fits files.")
 
     # FITS FZ file scan and identification
     # Sometimes raw products are compressed so we doublecheck them for raw files
@@ -148,6 +152,7 @@ def muse_script():
     fits_list = list(Path(rootDir).rglob('*.fits.fz'))
 
     print("Starting fz...")
+    logging.info("Starting fz file scanning.")
     time.sleep(0.1)  # Makes the terminal output pretty
     for filepath in tqdm(fits_list):
         header = fits.getheader(filepath)
@@ -158,22 +163,32 @@ def muse_script():
             nightlog_path = Path(str(filepath)[:-7] + "NL.txt")
             if Path.exists(nightlog_path):
                 all_nightlog_files.append(nightlog_path)
+    logging.info("Finished with fz files.")
 
     # detections.cat file scan and identification
     # pampelmuse source catalogs
     print("Generating list of pampelmuse cat files...")
+    logging.info("Generating a list of pampelmuse source catalogs.")
     all_catalog_files = list(Path(rootDir).rglob("*.detections.cat"))
 
 
     end = time.time()
     print('{:.3f}'.format(end-start) + " seconds to finish file search")
     print('{:d}'.format(len(all_raw_files)) + " raw science exposures found")
+    logging.info('{:d}'.format(len(all_raw_files)) + " raw science exposures found")
+    logging.info('{:d}'.format(len(all_nightlog_files)) + " nightlogs found")
     print('{:d}'.format(len(all_nightlog_files)) + " nightlogs found")
+    logging.info('{:d}'.format(len(all_datacube_files)) + " reduced datacubes found")
     print('{:d}'.format(len(all_datacube_files)) + " reduced datacubes found")
+    logging.info('{:d}'.format(len(all_raman_files)) + " raman files found")
     print('{:d}'.format(len(all_raman_files)) + " raman files found")
+    logging.info('{:d}'.format(len(all_prm_files)) + " PRM files found")
     print('{:d}'.format(len(all_prm_files)) + " PRM files found")
+    logging.info('{:d}'.format(len(all_psf_files)) + " PSF files found")
     print('{:d}'.format(len(all_psf_files)) + " PSF files found")
+    logging.info('{:d}'.format(len(all_catalog_files)) + " catalog files found")
     print('{:d}'.format(len(all_catalog_files)) + " catalog files found")
+    logging.info('{:d}'.format(skip_number) + " files skipped")
     print('{:d}'.format(skip_number) + " files skipped")
 
     # Datacube extraction
@@ -189,7 +204,9 @@ def muse_script():
         try:
             target = header['OBJECT']  # Obtain the target name
         except KeyError:
+            logging.warning(str(reduced_cube_filename) + " does not have a header key OBJECT, skipping file.")
             print("The header OBJECT does not exist")
+            continue
         if Target.exists(target_name=target):  # If the target already exists in the database, get it from the db
             cube_parameters['target'] = Target.get(target_name=target)
         else:
@@ -200,7 +217,12 @@ def muse_script():
             if not cube_parameters['observation_time'] in unique_observations:
                 unique_observations.append(cube_parameters['observation_time'])
         except KeyError:
+            logging.warning(str(reduced_cube_filename) + " the header DATE-OBS does not exist")
             print("The header DATE-OBS does not exist")
+            continue
+        except Exception as e:
+            logging.warning(str(reduced_cube_filename) + " " + str(e))
+            continue
 
         cube_parameters['instrument_mode'] = fetch_data(header, 'HIERARCH ESO INS MODE')
         cube_parameters['header'] = dict(header)
@@ -215,6 +237,7 @@ def muse_script():
     psf_entries = []
 
     print("Parsing through found prm files...")
+    logging.info("Starting prm and psf file parsing.")
     for prm_file in all_prm_files:
         # PRM File
         observation_info = {}
@@ -247,12 +270,14 @@ def muse_script():
 
                 if observation_info['target'] == 'n/a':
                     # PSF without target or observation parameters is kind of useless, skip these
+                    logging.warning((prm_file + " Could not find a matching cube for prm file. Skipping file."))
                     print("Couldn't find a match for a prm file " + prm_filename + ".")
                     continue
 
                 try:
                     params = hduList['PSFPARS'].data  # If the prm file does not have the PSFPARS extension, skip
                 except KeyError:
+                    logging.warning(prm_file + " Could not find PSFPARS in header. Possibly a broken prm file, skipping file.")
                     continue
                 try:
                     for i in range(len(params['name'])):  # The column 'name' is a list with the parameter names
@@ -264,10 +289,16 @@ def muse_script():
                     prmData = np.arange(hduList['SPECTRA'].header['NAXIS3'])  # Calculate the wavelength
                     prmWavelength = (prmRestw + (prmData * prmStep)) * 10 ** 9
                     psfParams['wavelength'] = prmWavelength.tolist()
-                except:
-                    print("Error: cannot read the PSF parameters")
+                except Exception as e:
+                    print(str(prm_file) + " " + str(e))
+                    logging.warning(str(prm_file) + " " + str(e))
+                    continue
         except FileNotFoundError:
+            logging.warning("The file " + str(prm_filename) + " does not exist.")
             print(f"The file {prm_filename} does not exist\n")  # If the prm file does not exists, skip
+            continue
+        except Exception as e:
+            logging.warning(str(prm_filename) + " " + str(e))
             continue
 
             # PSF File
@@ -283,60 +314,75 @@ def muse_script():
                             sourceData[column] = table[column].tolist()  # Store the column with its list of values
                             i += 1
                         sources[sourceID] = sourceData  # Store the source data
+                if sources == {}:
+                    print("Possibly a bad psf file, skipping file.")
+                    logging.warning(corresponding_psf_fullpath + " Possibly a bad psf file, PM_* layers are missing")
         except FileNotFoundError:
+            logging.warning("The file " + str(corresponding_psf_fullpath) + "does not exist.")
             print(f"The file {corresponding_psf_fullpath} does not exist\n")  # If the psf file does not exists, skip
+            continue
+        except Exception as e:
+            logging.warning(str(prm_filename) + " " + str(e))
             continue
 
         psf_entries.append((observation_info.copy(), psfParams.copy(), sources.copy()))
+    logging.info("Finished prm and psf file parsing.")
 
     ##############################
     # Catalog parsing starts here
     ##############################
 
     catalog_entries = []
-    print("Parsing through found catalog files...")
+    print("Parsing through found source catalog files...")
+    logging.info("Starting pampelmuse source catalog file parsing.")
     for catalog_file in all_catalog_files:
         observation_info = {}
 
-        catalog_filepath, catalog_filename = os.path.split(catalog_file)
+        try:
+            catalog_filepath, catalog_filename = os.path.split(catalog_file)
 
-        expected_cube_name = catalog_filename.replace('.detections.cat', '.fits')
-        corresponding_cube_fullpath = catalog_filepath + "/" + expected_cube_name
+            expected_cube_name = catalog_filename.replace('.detections.cat', '.fits')
+            corresponding_cube_fullpath = catalog_filepath + "/" + expected_cube_name
 
-        observation_info['observation_time'] = 'n/a'
-        observation_info['target'] = 'n/a'
-        observation_info['instrument_mode'] = 'n/a'
-        # Check if the datacube is in the same directory, otherwise look elsewhere for it
-        if Path(corresponding_cube_fullpath).exists():
-            observation_info['observation_time'] = fits.getheader(corresponding_cube_fullpath)['DATE-OBS']
-            observation_info['target'] = Target.get(target_name=fits.getheader(corresponding_cube_fullpath)['OBJECT'])
-            observation_info['instrument_mode'] = fits.getheader(corresponding_cube_fullpath)['HIERARCH ESO INS MODE']
-        else:
-            for datacube_file in all_datacube_files:
-                if datacube_file.name == expected_cube_name:
-                    observation_info['observation_time'] = fits.getheader(datacube_file)['DATE-OBS']
-                    observation_info['target'] = Target.get(target_name=fits.getheader(datacube_file)['OBJECT'])
-                    observation_info['instrument_mode'] = fits.getheader(datacube_file)['HIERARCH ESO INS MODE']
-                    break
+            observation_info['observation_time'] = 'n/a'
+            observation_info['target'] = 'n/a'
+            observation_info['instrument_mode'] = 'n/a'
+            # Check if the datacube is in the same directory, otherwise look elsewhere for it
+            if Path(corresponding_cube_fullpath).exists():
+                observation_info['observation_time'] = fits.getheader(corresponding_cube_fullpath)['DATE-OBS']
+                observation_info['target'] = Target.get(target_name=fits.getheader(corresponding_cube_fullpath)['OBJECT'])
+                observation_info['instrument_mode'] = fits.getheader(corresponding_cube_fullpath)['HIERARCH ESO INS MODE']
+            else:
+                for datacube_file in all_datacube_files:
+                    if datacube_file.name == expected_cube_name:
+                        observation_info['observation_time'] = fits.getheader(datacube_file)['DATE-OBS']
+                        observation_info['target'] = Target.get(target_name=fits.getheader(datacube_file)['OBJECT'])
+                        observation_info['instrument_mode'] = fits.getheader(datacube_file)['HIERARCH ESO INS MODE']
+                        break
 
-        if observation_info['target'] == 'n/a':
-            # Catalog without target or observation parameters is kind of useless, skip these
-            print("Couldn't find a match for a catalog file " + catalog_filename + ".")
+            if observation_info['target'] == 'n/a':
+                # Catalog without target or observation parameters is kind of useless, skip these
+                print("Couldn't find a match for a catalog file " + catalog_filename + ".")
+                continue
+
+            catalog_table = Table.read(catalog_file, format="ascii.ecsv")
+            catalog_array = np.asarray(catalog_table)
+            list_of_cat_entries = []
+            for i in range(catalog_array.shape[0]):
+                entry_dict = {k: v for k, v in zip(catalog_array[i].dtype.names, catalog_array[i])}
+                list_of_cat_entries.append(entry_dict)
+
+            catalog_entries.append((observation_info.copy(), list_of_cat_entries.copy()))
+        except Exception as e:
+            logging.warning(str(catalog_file) + " " + str(e))
             continue
-
-        catalog_table = Table.read(catalog_file, format="ascii.ecsv")
-        catalog_array = np.asarray(catalog_table)
-        list_of_cat_entries = []
-        for i in range(catalog_array.shape[0]):
-            entry_dict = {k: v for k, v in zip(catalog_array[i].dtype.names, catalog_array[i])}
-            list_of_cat_entries.append(entry_dict)
-
-        catalog_entries.append((observation_info.copy(), list_of_cat_entries.copy()))
 
     #######################################
     # Raw exposure extraction starts here
     #######################################
 
+    print("Starting raw exposure extraction")
+    logging.warning("Starting raw exposure extraction.")
     raw_fits_entries = []
     for raw_filename in all_raw_files:
 
@@ -346,7 +392,9 @@ def muse_script():
         try:
             target = fetch_data(header, 'OBJECT')  # Obtain the target name
         except KeyError:
+            logging.warning(str(raw_filename) + " does not have a header key OBJECT, skipping file.")
             print("The header OBJECT does not exist")
+            continue
         if Target.exists(target_name=target):  # If the target already exists in the database, get it from the db
             raw_parameters['target'] = Target.get(target_name=target)
         else:
@@ -357,7 +405,12 @@ def muse_script():
             if not raw_parameters['observation_time'] in unique_observations:
                 unique_observations.append(raw_parameters['observation_time'])
         except KeyError:
+            logging.warning(str(raw_filename) + " does not have a header key DATE-OBS, skipping file.")
             print("The header DATE-OBS does not exist")
+            continue
+        except Exception as e:
+            logging.warning(str(raw_filename) + " " + str(e))
+            continue
 
         raw_parameters['instrument_mode'] = fetch_data(header, 'HIERARCH ESO INS MODE')
         raw_parameters['header'] = dict(header)
@@ -371,22 +424,30 @@ def muse_script():
             pass
 
         raw_fits_entries.append(raw_parameters)
+    logging.warning("Finished raw exposure extraction.")
 
     nightlog_weather_entries = []
     corresponding_rawfile = ""
     # Nightlog extraction
+    print("Starting nightlog extraction")
+    logging.info("Starting nightlog extraction.")
     for nightlog_filename in all_nightlog_files:
         try:
             nightlog_parameters = {}
             corresponding_rawfile = str(nightlog_filename)[:-6] + "fits.fz"
             raw_header = fits.getheader(corresponding_rawfile)
         except FileNotFoundError:
-            print("Raw file " + corresponding_rawfile + " not found.")
+            logging.warning("Raw file " + corresponding_rawfile + " not found for a nightlog.")
+            print("Raw file " + corresponding_rawfile + " not found for a nightlog.")
+            continue
+        except Exception as e:
+            logging.warning(corresponding_rawfile + " " + str(e))
             continue
         try:
             with open(nightlog_filename) as f:
                 read_lines = f.readlines()
         except FileExistsError:
+            logging.warning("Nightlog file " + nightlog_filename + " not found.")
             print("Nightlog file " + nightlog_filename + " not found.")
             continue
         # Redundant doublecheck that this is indeed a science exposure
@@ -394,8 +455,13 @@ def muse_script():
             continue
 
         obs_time = header["DATE-OBS"]
-        local_start_time = float(raw_header["UTC"])
-        integration_time = float(raw_header["EXPTIME"])
+        try:
+            local_start_time = float(raw_header["UTC"])
+            integration_time = float(raw_header["EXPTIME"])
+        except Exception as e:
+            logging.warning(corresponding_rawfile + " " + str(e))
+            continue
+
         local_end_time = (local_start_time + integration_time) % 86400.0
         if local_start_time > 43200.0:
             local_start_time -= 86400.0
@@ -412,6 +478,10 @@ def muse_script():
                 weather_time = float(line_split[0].split(":")[0]) * 3600.0 + float(line_split[0].split(":")[1]) * 60.0
             except ValueError:
                 continue
+            except Exception as e:
+                logging.warning(nightlog_filename + " " + str(e))
+                continue
+
             if weather_time > 43200.0:
                 weather_time -= 86400.0
             #print(weather_time)
@@ -428,32 +498,36 @@ def muse_script():
         observation_end_comment = "None"
         i = -1
         # Loop through the weather comments
-        for line in line_extraction:
-            weather_comment_time = line[0]
-            i += 1
-            if weather_comment_time > 43200:
-                weather_comment_time -= 86400
-            # Check we've reached past the exposure start
-            if weather_comment_time > local_start_time:
-                break
-            start_weather_time = line[0]
-            end_weather_time = line[0]
-            observation_start_condition = line[1]
-            observation_end_condition = line[1]
-            observation_start_comment = line[2]
-            observation_end_comment = line[2]
+        try:
+            for line in line_extraction:
+                weather_comment_time = line[0]
+                i += 1
+                if weather_comment_time > 43200:
+                    weather_comment_time -= 86400
+                # Check we've reached past the exposure start
+                if weather_comment_time > local_start_time:
+                    break
+                start_weather_time = line[0]
+                end_weather_time = line[0]
+                observation_start_condition = line[1]
+                observation_end_condition = line[1]
+                observation_start_comment = line[2]
+                observation_end_comment = line[2]
 
-        # Loop through the weather comments, but start where we left off previously
-        for line in line_extraction[i:]:
-            weather_comment_time = line[0]
-            if line[0] > 43200:
-                weather_comment_time -= 86400
-            # Check we've reached past the exposure end
-            if weather_comment_time > local_end_time:
-                break
-            end_weather_time = line[0]
-            observation_end_condition = line[1]
-            observation_end_comment = line[2]
+            # Loop through the weather comments, but start where we left off previously
+            for line in line_extraction[i:]:
+                weather_comment_time = line[0]
+                if line[0] > 43200:
+                    weather_comment_time -= 86400
+                # Check we've reached past the exposure end
+                if weather_comment_time > local_end_time:
+                    break
+                end_weather_time = line[0]
+                observation_end_condition = line[1]
+                observation_end_comment = line[2]
+        except Exception as e:
+            logging.warning(nightlog_filename + " " + str(e))
+            continue
 
         # Add all the interesting parameters to a dictionary...
         nightlog_parameters["observation_time"] = raw_header["DATE-OBS"]
@@ -466,9 +540,12 @@ def muse_script():
 
         # ...and throw it into the pile
         nightlog_weather_entries.append(nightlog_parameters)
+    logging.info("Finished nightlog extraction.")
 
     # Raman file extraction
     raman_fits_entries = []
+    print("Starting Raman file extraction")
+    logging.info("Starting Raman file extraction.")
     for raman_filename in all_raman_files:
 
         raman_parameters = {}
@@ -477,7 +554,9 @@ def muse_script():
         try:
             target = header['OBJECT']  # Obtain the target name
         except KeyError:
+            logging.warning(str(raman_filename + " does not have a header key OBJECT, skipping file."))
             print("The header OBJECT does not exist")
+            continue
         if Target.exists(target_name=target):  # If the target already exists in the database, get it from the db
             raman_parameters['target'] = Target.get(target_name=target)
         else:
@@ -488,7 +567,9 @@ def muse_script():
             if not raman_parameters['observation_time'] in unique_observations:
                 unique_observations.append(raman_parameters['observation_time'])
         except KeyError:
+            logging.warning(str(reduced_cube_filename) + " does not have a header key DATE-OBS, skipping file.")
             print("The header DATE-OBS does not exist")
+            continue
 
         raman_parameters['instrument_mode'] = fetch_data(header, 'HIERARCH ESO INS MODE')
         raman_parameters['header'] = dict(header)
@@ -498,8 +579,11 @@ def muse_script():
             pass
 
         raman_fits_entries.append(raman_parameters)
+    logging.info("Finished Raman file extraction.")
 
     # Identification and linking of previous files to a same exposure
+    print("Starting the file linking and database update procedure.")
+    logging.info("Starting the file linking and database update procedure.")
     new_entries = 0
     modified_entries = 0
     for observation_key in unique_observations:
@@ -585,19 +669,38 @@ def muse_script():
                         column == 'insMode'):
                     continue
                 database_value = getattr(database_entry, column)
+                if type(value) == str:
+                    value = value.strip()
+                    database_value = database_value.strip()
                 if not value == database_value:
                     modified_entry_dictionary[column] = value
                     entry_is_modified = True
             if entry_is_modified:
+                logging.info("Modifying an entry with observation time " + observation_dictionary['observation_time'])
                 database_entry.set(**modified_entry_dictionary)
                 modified_entries += 1
 
     print('Finished updating the database, ' + '{:d}'.format(new_entries) + " new entries and "
           + '{:d}'.format(modified_entries) + " modified entries.")
+    logging.info('Finished updating the database, ' + '{:d}'.format(new_entries) + " new entries and "
+          + '{:d}'.format(modified_entries) + " modified entries.")
 
 
 # Main part starts here
-db.bind(provider="mysql", host="127.0.0.1", user=user, passwd=passwd, db=database_name)
-db.generate_mapping(check_tables=False, create_tables=True)
+log_filename = datetime.now().strftime('%d-%m-%Y_%H:%M:%S.log')
+logging.basicConfig(filename=log_filename,
+                    format='%(asctime)s %(levelname)s %(message)s',
+                    datefmt='%d-%m-%Y %H:%M:%S.log',
+                    level=logging.INFO)
+print("Started a logfile called " + log_filename)
+try:
+    db.bind(provider="mysql", host="127.0.0.1", user=user, passwd=passwd, db=database_name)
+    db.generate_mapping(check_tables=False, create_tables=True)
+    logging.info("Connected to SQL database successfully.")
+except Exception as e:
+    print("Error with SQL connection, check the log for more information.")
+    logging.error("SQL connection problem")
+    logging.error(e)
+    quit(2)
 
 muse_script()
