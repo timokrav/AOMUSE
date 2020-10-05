@@ -407,6 +407,72 @@ def muse_script():
         except Exception as e:
             logging.warning(str(raw_filename) + " " + str(e))
             continue
+            
+        # SGS and SPARTA header extraction    
+        try:
+            flag = False # Flag not relevant, just to print the \n before a missed extension
+            with fits.open(raw_filename) as hduList: 
+                try:
+                    for tupla in hduList.info(False): # Iterate in the list of the extensions
+                        if('CHAN' in tupla[1]): # Looking for the CHAN extensions
+                            data[tupla[1]] = dict(hduList[tupla[1]].header)
+                except:
+                    print("Error: channel header not found")              
+                try:
+                    sgsData = {} # Dictionary that will store the data
+                    table = hduList['SGS_DATA'].data 
+                    for column in table.columns.names: # Iterate in the list of column names
+                        sgsData[column] = table[column].tolist() # Store the column with its list of values
+                    raw_parameters['SGS_DATA'] = sgsData
+                except KeyError:
+                    raw_parameters['SGS_DATA'] = None # If the extension does not exists, stores it anyway as None
+                    flag = True # Flag, not important, for the \n print
+                    print("SGS_DATA not found in", singleFileName)
+                try:
+                    agData = {}
+                    table = hduList['AG_DATA'].data
+                    for column in table.columns.names: # Iterate in the list of column names
+                        agData[column] = table[column].tolist() # Store the column with its list of values
+                    raw_parameters['AG_DATA'] = agData    
+                except KeyError:
+                    raw_parameters['AG_DATA'] = None # If the extension does not exists, stores it anyway as None
+                    flag = True # Flag, not important, for the \n print
+                    print("AG_DATA not found in", singleFileName)
+                try:
+                    asmData = {}
+                    table = hduList['ASM_DATA'].data
+                    for column in table.columns.names: # Iterate in the list of column names
+                        asmData[column] = table[column].tolist() # Store the column with its list of values
+                    raw_parameters['ASM_DATA'] = asmData      
+                except KeyError:
+                    raw_parameters['ASM_DATA'] = None # If the extension does not exists, stores it anyway as None
+                    flag = True # Flag, not important, for the \n print
+                    print("ASM_DATA not found in", singleFileName)             
+                try:
+                    spartaAtmData = {}
+                    table = hduList['SPARTA_ATM_DATA'].data
+                    for column in table.columns.names: # Iterate in the list of column names
+                        spartaAtmData[column] = table[column].tolist() # Store the column with its list of values
+                    raw_parameters['SPARTA_ATM_DATA'] = spartaAtmData
+                except KeyError:
+                    raw_parameters['SPARTA_ATM_DATA'] = None # If the extension does not exists, stores it anyway as None
+                    flag = True # Flag, not important, for the \n print
+                    print("SPARTA_ATM_DATA not found in", singleFileName)
+                try:
+                    spartaCn2Data = {}
+                    table = hduList['SPARTA_CN2_DATA'].data
+                    for column in table.columns.names: # Iterate in the list of column names
+                        spartaCn2Data[column] = table[column].tolist() # Store the column with its list of values
+                    raw_parameters['SPARTA_CN2_DATA'] = spartaCn2Data
+                except KeyError:
+                    raw_parameters['SPARTA_CN2_DATA'] = None # If the extension does not exists, stores it anyway as None
+                    flag = True # Flag, not important, for the \n print
+                    print("SPARTA_CN2_DATA not found in", singleFileName)        
+                if(flag):
+                    print("") # The \n print
+        except FileNotFoundError:
+            print("The file {rawFileName} does not exist\n") # If the raw file does not exists, skip
+            continue 
 
         raw_parameters['instrument_mode'] = fetch_data(header, 'HIERARCH ESO INS MODE')
         raw_parameters['header'] = dict(header)
