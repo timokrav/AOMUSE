@@ -48,9 +48,12 @@ class Exposure(db.Entity):
     insMode = Required(str)
     datacube_header = Optional(LongStr)
     raw_exposure_header = Optional(LongStr)
+    raw_exposure_data = Optional(LongStr)
+    raw_exposure_filename = Optional(str, unique=True)
     raman_image_header = Optional(LongStr)
     pampelmuse_catalog = Optional(LongStr)
     psf_params = Optional(LongStr)
+    prm_filename = Optional(str, unique=True)
     sources = Optional(LongStr)
 
     #   ----- Sky parameters -----
@@ -187,7 +190,10 @@ def muse_script():
     logging.info('{:d}'.format(skip_number) + " files skipped")
     print('{:d}'.format(skip_number) + " files skipped")
 
-    # Datacube extraction
+    ###################################
+    # Datacube extraction starts here
+    ###################################
+
     unique_observations = []
     reduced_cube_entries = []
 
@@ -321,7 +327,7 @@ def muse_script():
             logging.warning(str(prm_filename) + " " + str(e))
             continue
 
-        psf_entries.append((observation_info.copy(), psfParams.copy(), sources.copy()))
+        psf_entries.append((observation_info.copy(), psfParams.copy(), sources.copy(), prm_file.name.copy()))
     logging.info("Finished prm and psf file parsing.")
 
     ##############################
@@ -410,6 +416,7 @@ def muse_script():
             
         # SGS and SPARTA header extraction    
         try:
+            data = {}
             flag = False # Flag not relevant, just to print the \n before a missed extension
             with fits.open(raw_filename) as hduList: 
                 try:
@@ -417,65 +424,67 @@ def muse_script():
                         if('CHAN' in tupla[1]): # Looking for the CHAN extensions
                             data[tupla[1]] = dict(hduList[tupla[1]].header)
                 except:
-                    print("Error: channel header not found")              
+                    logging.warning("Channel header not found " + raw_filename.name)              
                 try:
                     sgsData = {} # Dictionary that will store the data
                     table = hduList['SGS_DATA'].data 
                     for column in table.columns.names: # Iterate in the list of column names
                         sgsData[column] = table[column].tolist() # Store the column with its list of values
-                    raw_parameters['SGS_DATA'] = sgsData
+                    data['SGS_DATA'] = sgsData
                 except KeyError:
-                    raw_parameters['SGS_DATA'] = None # If the extension does not exists, stores it anyway as None
+                    data['SGS_DATA'] = None # If the extension does not exists, stores it anyway as None
                     flag = True # Flag, not important, for the \n print
-                    print("SGS_DATA not found in", singleFileName)
+                    logging.warning("SGS_DATA not found in" + raw_filename.name)
                 try:
                     agData = {}
                     table = hduList['AG_DATA'].data
                     for column in table.columns.names: # Iterate in the list of column names
                         agData[column] = table[column].tolist() # Store the column with its list of values
-                    raw_parameters['AG_DATA'] = agData    
+                    data['AG_DATA'] = agData    
                 except KeyError:
-                    raw_parameters['AG_DATA'] = None # If the extension does not exists, stores it anyway as None
+                    data['AG_DATA'] = None # If the extension does not exists, stores it anyway as None
                     flag = True # Flag, not important, for the \n print
-                    print("AG_DATA not found in", singleFileName)
+                    logging.warning("AG_DATA not found in" + raw_filename.name)
                 try:
                     asmData = {}
                     table = hduList['ASM_DATA'].data
                     for column in table.columns.names: # Iterate in the list of column names
                         asmData[column] = table[column].tolist() # Store the column with its list of values
-                    raw_parameters['ASM_DATA'] = asmData      
+                    data['ASM_DATA'] = asmData      
                 except KeyError:
-                    raw_parameters['ASM_DATA'] = None # If the extension does not exists, stores it anyway as None
+                    data['ASM_DATA'] = None # If the extension does not exists, stores it anyway as None
                     flag = True # Flag, not important, for the \n print
-                    print("ASM_DATA not found in", singleFileName)             
+                    logging.warning("ASM_DATA not found in" + raw_filename.name)             
                 try:
                     spartaAtmData = {}
                     table = hduList['SPARTA_ATM_DATA'].data
                     for column in table.columns.names: # Iterate in the list of column names
                         spartaAtmData[column] = table[column].tolist() # Store the column with its list of values
-                    raw_parameters['SPARTA_ATM_DATA'] = spartaAtmData
+                    data['SPARTA_ATM_DATA'] = spartaAtmData
                 except KeyError:
-                    raw_parameters['SPARTA_ATM_DATA'] = None # If the extension does not exists, stores it anyway as None
+                    data['SPARTA_ATM_DATA'] = None # If the extension does not exists, stores it anyway as None
                     flag = True # Flag, not important, for the \n print
-                    print("SPARTA_ATM_DATA not found in", singleFileName)
+                    logging.warning("SPARTA_ATM_DATA not found in" + raw_filename.name)
                 try:
                     spartaCn2Data = {}
                     table = hduList['SPARTA_CN2_DATA'].data
                     for column in table.columns.names: # Iterate in the list of column names
                         spartaCn2Data[column] = table[column].tolist() # Store the column with its list of values
-                    raw_parameters['SPARTA_CN2_DATA'] = spartaCn2Data
+                    data['SPARTA_CN2_DATA'] = spartaCn2Data
                 except KeyError:
-                    raw_parameters['SPARTA_CN2_DATA'] = None # If the extension does not exists, stores it anyway as None
+                    data['SPARTA_CN2_DATA'] = None # If the extension does not exists, stores it anyway as None
                     flag = True # Flag, not important, for the \n print
-                    print("SPARTA_CN2_DATA not found in", singleFileName)        
+                    logging.warning("SPARTA_CN2_DATA not found in" + raw_filename.name)        
                 if(flag):
-                    print("") # The \n print
+                    logging.warning("") # The \n print
         except FileNotFoundError:
-            print("The file {rawFileName} does not exist\n") # If the raw file does not exists, skip
+            logging.warning("The file {raw_filename.name} does not exist\n") # If the raw file does not exists, skip
             continue 
 
         raw_parameters['instrument_mode'] = fetch_data(header, 'HIERARCH ESO INS MODE')
         raw_parameters['header'] = dict(header)
+        raw_parameters['raw_data'] = data
+        raw_parameters['raw_filename'] = raw_filename.name
         try:
             del raw_parameters['header']['COMMENT']  # and then delete the COMMENT key, because it does not have the JSON format and
         except KeyError:  # throws an error when saving it in the database
@@ -664,6 +673,8 @@ def muse_script():
                 observation_dictionary['observation_time'] = raw_fits_entry['observation_time']
                 observation_dictionary['insMode'] = raw_fits_entry['instrument_mode']
                 observation_dictionary['raw_exposure_header'] = raw_fits_entry['header']
+                observation_dictionary['raw_exposure_data'] = raw_fits_entry['raw_data']
+                observation_dictionary['raw_exposure_filename'] = raw_fits_entry['raw_filename']
                 raw_fits_entries.remove(raw_fits_entry)
                 break
         for nightlog_entry in nightlog_weather_entries:
@@ -691,6 +702,7 @@ def muse_script():
                 observation_dictionary['insMode'] = psf_entry[0]['instrument_mode']
                 observation_dictionary['psf_params'] = psf_entry[1]
                 observation_dictionary['sources'] = psf_entry[2]
+                observation_dictionary['prm_filename'] = psf_entry[3]
                 psf_entries.remove(psf_entry)
                 break
         for catalog_entry in catalog_entries:
@@ -702,7 +714,7 @@ def muse_script():
                 catalog_entries.remove(catalog_entry)
                 break
 
-        # Modify headers into more JSON-like format
+        # Modify headers and tables into more JSON-like format
         if 'pampelmuse_catalog' in observation_dictionary:
             observation_dictionary['pampelmuse_catalog'] = json.dumps(observation_dictionary['pampelmuse_catalog'], default=convert_npint64_to_int)
         if 'psf_params' in observation_dictionary:
@@ -713,6 +725,8 @@ def muse_script():
             observation_dictionary['raman_image_header'] = json.dumps(observation_dictionary['raman_image_header'])
         if 'raw_exposure_header' in observation_dictionary:
             observation_dictionary['raw_exposure_header'] = json.dumps(observation_dictionary['raw_exposure_header'])
+        if 'raw_exposure_data' in observation_dictionary:
+            observation_dictionary['raw_exposure_data'] = json.dumps(observation_dictionary['raw_exposure_data'])
         if 'datacube_header' in observation_dictionary:
             observation_dictionary['datacube_header'] = json.dumps(observation_dictionary['datacube_header'])
 
