@@ -21,9 +21,21 @@ class Exposure(db.Entity):
     insMode = Required(str)
     datacube_header = Optional(LongStr)
     raw_exposure_header = Optional(LongStr)
+    raw_exposure_data = Optional(LongStr)
+    raw_exposure_filename = Optional(str, unique=True)
     raman_image_header = Optional(LongStr)
+    pampelmuse_catalog = Optional(LongStr)
     psf_params = Optional(LongStr)
+    prm_filename = Optional(str, unique=True)
     sources = Optional(LongStr)
+
+    #   ----- Sky parameters -----
+    sky_condition_start_time = Optional(float)
+    sky_condition_start = Optional(LongStr)
+    sky_comment_start = Optional(LongStr)
+    sky_condition_end_time = Optional(float)
+    sky_condition_end = Optional(LongStr)
+    sky_comment_end = Optional(LongStr)
 
     #   ----- Relations -----
 
