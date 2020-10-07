@@ -25,8 +25,9 @@ class Exposure(db.Entity):
     raw_exposure_filename = Optional(str, unique=True)
     raman_image_header = Optional(LongStr)
     pampelmuse_catalog = Optional(LongStr)
-    psf_params = Optional(LongStr)
+    pampelmuse_params = Optional(LongStr)
     prm_filename = Optional(str, unique=True)
+    psf_table = Optional(LongStr)
     sources = Optional(LongStr)
 
     #   ----- Sky parameters -----
