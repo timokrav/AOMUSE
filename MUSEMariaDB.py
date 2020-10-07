@@ -701,7 +701,7 @@ def muse_script():
                 observation_dictionary['target'] = psf_entry[0]['target']
                 observation_dictionary['observation_time'] = psf_entry[0]['observation_time']
                 observation_dictionary['insMode'] = psf_entry[0]['instrument_mode']
-                observation_dictionary['psf_params'] = psf_entry[1]
+                observation_dictionary['pampelmuse_params'] = psf_entry[1]
                 observation_dictionary['sources'] = psf_entry[2]
                 observation_dictionary['prm_filename'] = psf_entry[3]
                 psf_entries.remove(psf_entry)
@@ -718,8 +718,8 @@ def muse_script():
         # Modify headers and tables into more JSON-like format
         if 'pampelmuse_catalog' in observation_dictionary:
             observation_dictionary['pampelmuse_catalog'] = json.dumps(observation_dictionary['pampelmuse_catalog'], default=convert_npint64_to_int)
-        if 'psf_params' in observation_dictionary:
-            observation_dictionary['psf_params'] = json.dumps(observation_dictionary['psf_params'])
+        if 'pampelmuse_params' in observation_dictionary:
+            observation_dictionary['pampelmuse_params'] = json.dumps(observation_dictionary['pampelmuse_params'])
         if 'sources' in observation_dictionary:
             observation_dictionary['sources'] = json.dumps(observation_dictionary['sources'])
         if 'raman_image_header' in observation_dictionary:
